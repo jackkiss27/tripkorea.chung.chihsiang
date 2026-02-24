@@ -309,6 +309,13 @@
                     <div class="bg-gray-50 p-4 rounded-xl border border-gray-200">
                         <label class="label mb-2 flex items-center gap-2"><i class="fa-solid fa-cloud"></i> 雲端同步 <span v-if="isCloud" class="text-[10px] bg-green-500 text-white px-2 rounded">OK</span></label>
                         <textarea v-model="firebaseConfigInput" placeholder='貼上 Firebase 設定碼...' class="w-full h-24 border border-gray-200 rounded-lg p-2 text-xs font-mono mb-2"></textarea>
+                        
+                        <!-- 新增：顯示具體的 Firebase 錯誤訊息 -->
+                        <div v-if="cloudError" class="mb-3 p-2 bg-red-50 text-red-600 border border-red-200 text-xs rounded-lg font-mono break-all leading-relaxed">
+                            <span class="font-bold block mb-1">連線被拒絕，請檢查以下錯誤：</span>
+                            {{ cloudError }}
+                        </div>
+
                         <div class="flex gap-2">
                              <button @click="forceUpload" class="flex-1 bg-blue-100 text-blue-700 py-2 rounded-lg text-sm font-bold">⬆️ 強制上傳</button>
                              <button @click="connectCloud" class="flex-1 bg-autumn-hickory text-white py-2 rounded-lg text-sm font-bold">連線</button>
@@ -372,6 +379,7 @@
                 
                 // 新增：出發日期變數 (預設抓 2025-12-05)
                 const startDate = ref('2025-12-05');
+                const cloudError = ref(''); // 新增：用來顯示雲端錯誤的變數
                 let sortableInstance = null; // 拖曳排序的實體
 
                 let db, tripDocRef, auth;
@@ -434,28 +442,43 @@
                     try{
                         let c; try{c=JSON.parse(v)}catch{c=new Function('return '+v)()};
                         localStorage.setItem('user_firebase_config',JSON.stringify(c));
-                        await initFirebase(c); showToast('連線成功'); 
-                    }catch(e){showToast('連線失敗','error')}
+                        await initFirebase(c); showToast('嘗試連線中...'); 
+                    }catch(e){showToast('連線失敗，設定碼錯誤','error'); cloudError.value = '設定碼格式不正確';}
                 };
 
                 const initFirebase=async(c)=>{
+                    cloudError.value = ''; // 每次連線前先清空錯誤
                     if(!window.FS)return;
-                    const app=window.FS.initializeApp(c);
-                    db=window.FS.getFirestore(app); auth=window.FA.getAuth(app); tripDocRef=window.FS.doc(db,'trip_planner_v26','shared_data');
-                    window.FA.signInAnonymously(auth).then(()=>{
-                        window.FS.onSnapshot(tripDocRef,(s)=>{
-                            if(s.exists()){
-                                const d=s.data(); isRemoteUpdate.value=true;
-                                if(d.itineraryDays)itineraryDays.value=JSON.parse(d.itineraryDays);
-                                if(d.expenses)expenses.value=JSON.parse(d.expenses);
-                                if(d.checkList)checkList.value=JSON.parse(d.checkList);
-                                if(d.memoText)memoText.value=d.memoText;
-                                if(d.travelers)travelers.value=JSON.parse(d.travelers);
-                                if(d.startDate)startDate.value=d.startDate; // 讀取 startDate
-                                isCloud.value=true; nextTick(()=>isRemoteUpdate.value=false);
-                            }else{ saveData(); isCloud.value=true; }
+                    try {
+                        const app=window.FS.initializeApp(c);
+                        db=window.FS.getFirestore(app); auth=window.FA.getAuth(app); tripDocRef=window.FS.doc(db,'trip_planner_v26','shared_data');
+                        
+                        window.FA.signInAnonymously(auth).then(()=>{
+                            window.FS.onSnapshot(tripDocRef,(s)=>{
+                                if(s.exists()){
+                                    const d=s.data(); isRemoteUpdate.value=true;
+                                    if(d.itineraryDays)itineraryDays.value=JSON.parse(d.itineraryDays);
+                                    if(d.expenses)expenses.value=JSON.parse(d.expenses);
+                                    if(d.checkList)checkList.value=JSON.parse(d.checkList);
+                                    if(d.memoText)memoText.value=d.memoText;
+                                    if(d.travelers)travelers.value=JSON.parse(d.travelers);
+                                    if(d.startDate)startDate.value=d.startDate; // 讀取 startDate
+                                    isCloud.value=true; nextTick(()=>isRemoteUpdate.value=false);
+                                }else{ saveData(); isCloud.value=true; }
+                            }, (error) => {
+                                console.error("Firestore Error:", error);
+                                cloudError.value = error.message || '沒有權限讀取資料庫 (請檢查 Rules 設定)';
+                                isCloud.value=false;
+                            });
+                        }).catch((err) => {
+                            console.error("Auth Error:", err);
+                            cloudError.value = err.message || '匿名登入失敗 (請確認已開啟 Anonymous 驗證)';
+                            isCloud.value=false;
                         });
-                    });
+                    } catch (err) {
+                        cloudError.value = err.message || 'Firebase 初始化失敗';
+                        isCloud.value=false;
+                    }
                 };
 
                 const resetConnection = () => { localStorage.removeItem('user_firebase_config'); firebaseConfigInput.value = ''; isCloud.value = false; showToast('已重置連線設定'); };
@@ -555,6 +578,7 @@
 
                 return {
                     startDate, // 匯出 startDate
+                    cloudError, // 匯出錯誤訊息變數
                     currentTab,showAddModal,showSettings,activeDayIndex,itineraryDays,currentDayItinerary,currentDateLabel,
                     formItinerary,formExpense,expenses,exchangeRate,totalExpenseKRW,balances,travelers,newTravelerName,editingItem,checkList,memoText,evaluatedAmount,newCheckItem,weather,
                     openSettings,openAddModal,closeModal,addDay,editItem,askDeleteItem,askDeleteExpense,submitForm,addTraveler,askRemoveTraveler,addCheckItem,deleteCheckItem,
